@@ -20,9 +20,12 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"coriolis-logger/apiserver/auth"
@@ -39,9 +42,31 @@ import (
 
 var log = loggo.GetLogger("coriolis.logger.controllers")
 
+func checkSameOriginWithProxy(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host, _, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		return false
+	}
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		isEqual := strings.EqualFold(host, forwardedFor)
+		return isEqual
+	}
+	return strings.EqualFold(host, r.Host)
+}
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 16384,
+	CheckOrigin:     checkSameOriginWithProxy,
 }
 
 func canAccess(ctx context.Context) bool {
