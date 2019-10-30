@@ -20,15 +20,13 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"coriolis-logger/apiserver/auth"
+	"coriolis-logger/config"
 	"coriolis-logger/datastore/common"
 	"coriolis-logger/logging"
 	"coriolis-logger/params"
@@ -42,35 +40,9 @@ import (
 
 var log = loggo.GetLogger("coriolis.logger.controllers")
 
-func checkSameOriginWithProxy(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	for k, v := range r.Header {
-		log.Warningf("%v --> %v", k, v)
-	}
-	log.Warningf("%v --> %v --> %v", origin, u.Host, r.Host)
-	host, _, err := net.SplitHostPort(u.Host)
-	if err != nil {
-		return false
-	}
-	forwardedFor := r.Header.Get("X-Forwarded-For")
-	if forwardedFor != "" {
-		isEqual := strings.EqualFold(host, forwardedFor)
-		return isEqual
-	}
-	return strings.EqualFold(host, r.Host)
-}
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 16384,
-	CheckOrigin:     checkSameOriginWithProxy,
 }
 
 func canAccess(ctx context.Context) bool {
@@ -83,16 +55,27 @@ func canAccess(ctx context.Context) bool {
 	return authDetails.IsAdmin
 }
 
-func NewLogHandler(hub *wsWriter.Hub, datastore common.DataStore) *LogHandlers {
-	return &LogHandlers{
+func NewLogHandler(hub *wsWriter.Hub, datastore common.DataStore, cfg config.APIServer) *LogHandlers {
+	han := &LogHandlers{
 		hub:   hub,
 		store: datastore,
+		cfg:   cfg,
+		upgrader: websocket.Upgrader{
+			ReadBufferSize:  1024,
+			WriteBufferSize: 16384,
+		},
 	}
+
+	corsChecker := han.getCORSChecker()
+	han.upgrader.CheckOrigin = corsChecker
+	return han
 }
 
 type LogHandlers struct {
-	hub   *wsWriter.Hub
-	store common.DataStore
+	hub      *wsWriter.Hub
+	store    common.DataStore
+	cfg      config.APIServer
+	upgrader websocket.Upgrader
 }
 
 func getSeverity(severity string) (logging.Severity, error) {
@@ -112,6 +95,25 @@ func getSeverity(severity string) (logging.Severity, error) {
 	return ret, nil
 }
 
+func (l *LogHandlers) getCORSChecker() func(r *http.Request) bool {
+	if l.cfg.CORSOrigins == nil || len(l.cfg.CORSOrigins) == 0 {
+		return nil
+	}
+
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		for _, val := range l.cfg.CORSOrigins {
+			if val == "*" || val == origin {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 func (l *LogHandlers) WSHandler(writer http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	if !canAccess(ctx) {
@@ -126,7 +128,7 @@ func (l *LogHandlers) WSHandler(writer http.ResponseWriter, req *http.Request) {
 	}
 	binName := req.URL.Query().Get("app_name")
 
-	conn, err := upgrader.Upgrade(writer, req, nil)
+	conn, err := l.upgrader.Upgrade(writer, req, nil)
 	if err != nil {
 		log.Errorf("error upgrading to websockets: %v", err)
 		return
