@@ -51,6 +51,10 @@ func checkSameOriginWithProxy(r *http.Request) bool {
 	if err != nil {
 		return false
 	}
+	for k, v := range r.Header {
+		log.Warningf("%v --> %v", k, v)
+	}
+	log.Warningf("%v --> %v --> %v", origin, u.Host, r.Host)
 	host, _, err := net.SplitHostPort(u.Host)
 	if err != nil {
 		return false
