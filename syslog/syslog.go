@@ -83,6 +83,7 @@ func (s *SyslogWorker) doWork() {
 				// channel was closed, exiting
 				return
 			}
+			log.Warningf(">> %v", logParts)
 			logMsg, err := logging.SyslogToLogMessage(logParts)
 			if err != nil {
 				log.Errorf("failed to parse log message: %q", err)
